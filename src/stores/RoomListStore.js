@@ -37,6 +37,7 @@ const CATEGORY_BOLD = "bold";   // Unread messages (not notified, 'Mentions Only
 const CATEGORY_IDLE = "idle";   // Nothing of interest
 
 const CATEGORY_ORDER = [CATEGORY_RED, CATEGORY_GREY, CATEGORY_BOLD, CATEGORY_IDLE];
+// TODO get list order, defaulting to settings, override=manual
 const LIST_ORDERS = {
     "m.favourite": "manual",
     "im.vector.fake.invite": "recent",
@@ -47,18 +48,16 @@ const LIST_ORDERS = {
 };
 
 /**
- * Identifier for the "breadcrumb" (or "sort by most important room first") algorithm.
- * Includes a provision for keeping the currently open room from flying down the room
- * list.
+ * Identifier for alphabetic sorting behaviour: sort by the room name alphabetically first.
  * @type {string}
  */
-const ALGO_IMPORTANCE = "importance";
+export const ALGO_ALPHABETIC = "alphabetic";
 
 /**
  * Identifier for classic sorting behaviour: sort by the most recent message first.
  * @type {string}
  */
-const ALGO_RECENT = "recent";
+export const ALGO_RECENT = "recent";
 
 /**
  * A class for storing application state for categorising rooms in
@@ -80,9 +79,7 @@ class RoomListStore extends Store {
     updateSortingAlgorithm(algorithm) {
         // Dev note: We only have two algorithms at the moment, but it isn't impossible that we want
         // multiple in the future. Also constants make things slightly clearer.
-        const byImportance = algorithm === ALGO_IMPORTANCE;
-        console.log("Updating room sorting algorithm: sortByImportance=" + byImportance);
-        this._setState({orderRoomsByImportance: byImportance});
+        this._setState({algorithm});
 
         // Trigger a resort of the entire list to reflect the change in algorithm
         this._generateInitialRoomLists();
@@ -106,10 +103,13 @@ class RoomListStore extends Store {
             presentationLists: defaultLists, // like `lists`, but with arrays of rooms instead
             ready: false,
             stickyRoomId: null,
-            orderRoomsByImportance: true,
+            algorithm: ALGO_RECENT,
+            orderImportantFirst: false,
         };
 
-        SettingsStore.monitorSetting('RoomList.orderByImportance', null);
+        SettingsStore.monitorSetting('RoomList.orderByImportance', null); // TODO remove
+        SettingsStore.monitorSetting('RoomList.orderingAlgorithm', null);
+        SettingsStore.monitorSetting('RoomList.orderImportantFirst', null);
         SettingsStore.monitorSetting('feature_custom_tags', null);
     }
 
@@ -135,8 +135,8 @@ class RoomListStore extends Store {
             case 'setting_updated': {
                 if (!logicallyReady) break;
 
-                if (payload.settingName === 'RoomList.orderByImportance') {
-                    this.updateSortingAlgorithm(payload.newValue === true ? ALGO_IMPORTANCE : ALGO_RECENT);
+                if (payload.settingName === 'RoomList.orderingAlgorithm') {
+                    this.updateSortingAlgorithm(payload.newValue);
                 } else if (payload.settingName === 'feature_custom_tags') {
                     this._setState({tagsEnabled: payload.newValue});
                     this._generateInitialRoomLists(); // Tags means we have to start from scratch
@@ -157,8 +157,7 @@ class RoomListStore extends Store {
 
                 this._matrixClient = payload.matrixClient;
 
-                const algorithm = SettingsStore.getValue("RoomList.orderByImportance")
-                    ? ALGO_IMPORTANCE : ALGO_RECENT;
+                const algorithm = SettingsStore.getValue("RoomList.orderingAlgorithm");
                 this.updateSortingAlgorithm(algorithm);
             }
             break;
@@ -609,7 +608,7 @@ class RoomListStore extends Store {
         Object.keys(lists).forEach((listKey) => {
             let comparator;
             switch (LIST_ORDERS[listKey]) {
-                case "recent":
+                case ALGO_RECENT:
                     comparator = (entryA, entryB) => {
                         return this._recentsComparator(entryA, entryB, (room) => {
                             if (!room) return Number.MAX_SAFE_INTEGER; // Should only happen in tests
@@ -624,12 +623,15 @@ class RoomListStore extends Store {
                         });
                     };
                     break;
+                case ALGO_ALPHABETIC:
+                    comparator = (entryA, entryB) => this._alphabeticComparator(entryA, entryB);
+                    break;
                 case "manual":
                 default:
                     comparator = this._getManualComparator(listKey);
                     break;
             }
-            lists[listKey].sort(comparator);
+            lists[listKey].sort(comparator); // inline the common CAT comparator here?
         });
 
         this._setState({
@@ -668,7 +670,7 @@ class RoomListStore extends Store {
     }
 
     _calculateCategory(room) {
-        if (!this._state.orderRoomsByImportance) {
+        if (!this._state.orderImportantFirst) {
             // Effectively disable the categorization of rooms if we're supposed to
             // be sorting by more recent messages first. This triggers the timestamp
             // comparison bit of _setRoomCategory and _recentsComparator instead of
@@ -689,22 +691,29 @@ class RoomListStore extends Store {
     }
 
     _recentsComparator(entryA, entryB, tsOfNewestEventFn) {
-        const roomA = entryA.room;
-        const roomB = entryB.room;
-        const categoryA = entryA.category;
-        const categoryB = entryB.category;
-
-        if (categoryA !== categoryB) {
-            const idxA = CATEGORY_ORDER.indexOf(categoryA);
-            const idxB = CATEGORY_ORDER.indexOf(categoryB);
+        if (entryA.category !== entryB.category) {
+            const idxA = CATEGORY_ORDER.indexOf(entryA.category);
+            const idxB = CATEGORY_ORDER.indexOf(entryB.category);
             if (idxA > idxB) return 1;
             if (idxA < idxB) return -1;
             return 0; // Technically not possible
         }
 
-        const timestampA = tsOfNewestEventFn(roomA);
-        const timestampB = tsOfNewestEventFn(roomB);
+        const timestampA = tsOfNewestEventFn(entryA.room);
+        const timestampB = tsOfNewestEventFn(entryB.room);
         return timestampB - timestampA;
+    }
+
+    _alphabeticComparator(entryA, entryB) {
+        if (entryA.category !== entryB.category) {
+            const idxA = CATEGORY_ORDER.indexOf(entryA.category);
+            const idxB = CATEGORY_ORDER.indexOf(entryB.category);
+            if (idxA > idxB) return 1;
+            if (idxA < idxB) return -1;
+            return 0; // Technically not possible
+        }
+
+        return this._lexicographicalComparator(entryA.room, entryB.room);
     }
 
     _lexicographicalComparator(roomA, roomB) {

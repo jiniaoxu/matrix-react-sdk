@@ -26,6 +26,7 @@ import CustomStatusController from "./controllers/CustomStatusController";
 import ThemeController from './controllers/ThemeController';
 import ReloadOnChangeController from "./controllers/ReloadOnChangeController";
 import {RIGHT_PANEL_PHASES} from "../stores/RightPanelStorePhases";
+import * as RoomListStore from "../stores/RoomListStore";
 
 // These are just a bunch of helper arrays to avoid copy/pasting a bunch of times
 const LEVELS_ROOM_SETTINGS = ['device', 'room-device', 'room-account', 'account', 'config'];
@@ -433,6 +434,18 @@ export const SETTINGS = {
             deny: [],
         },
     },
+
+    "RoomList.orderingAlgorithm": {
+        supportedLevels: LEVELS_ACCOUNT_SETTINGS,
+        displayName: _td('Order rooms in the room list by most important first instead of most recent'),
+        default: RoomListStore.ALGO_RECENT,
+    },
+    "RoomList.orderImportantFirst": {
+        supportedLevels: LEVELS_ACCOUNT_SETTINGS,
+        displayName: _td('Order rooms in the room list by most important first instead of most recent'),
+        default: false,
+    },
+
     "RoomList.orderByImportance": {
         supportedLevels: LEVELS_ACCOUNT_SETTINGS,
         displayName: _td('Order rooms in the room list by most important first instead of most recent'),
